@@ -13,7 +13,9 @@ import org.detector.communication.Communication;
 import org.detector.connector.WsConnector;
 import org.detector.connector.impl.FixTrialConnector;
 import org.detector.function.BrokerageIssuer;
+import org.detector.function.IssuerBuild;
 import org.detector.function.MapperClosure;
+import org.detector.interaction.Issuer;
 import org.detector.interaction.impl.CommandIssuer;
 import org.detector.mapper.ConnectorMapper;
 import org.detector.model.bitfinex.BitfinexTick;
@@ -39,21 +41,27 @@ public class TradeTerminal {
             .objectMapper(q)
             .build();
 
-    final static BrokerageIssuer BROKERAGE_ISSUER = broker -> Communication.initSession(broker)
-            .getDoneIssuer(issuerCreator.mapperUsed(objectMapper));
+    static Function<ObjectMapper, IssuerBuild> issuerBuildFunction = issuerCreator::mapperUsed;
+
+    static Function<ObjectMapper, Function<Broker, Issuer>> issuerFunction = om -> broker ->
+            issuerBuildFunction
+                    .andThen(Communication.initSession(broker)::getDoneIssuer)
+                    .apply(om);
 
     public static void main(String[] args) throws InterruptedException {
         final Command krakenTickerSub = KrakenSubscribeTickerCommand.of("BTC", "USDT");
         final Command bitfinexTickerSub = BitfinexSubscribeTickerCommand.of("BTC", "USD");
 
-        final Flux<Tick> arbiterFlux = BROKERAGE_ISSUER.issuerOnBroker(kraken)
+        Function<Broker, Issuer> brokerIssuer = issuerFunction.apply(objectMapper);
+
+        final Flux<Tick> arbiterFlux = brokerIssuer.apply(kraken)
                 .issue(krakenTickerSub)
                 .mapNotNull(brokerSpecific(KrakenTick.class))
                 .map(KrakenTick::getData)
                 .flatMap(Flux::fromIterable)
                 .map(tickMapper::map);
 
-        final Flux<Tick> arbiteeFlux = BROKERAGE_ISSUER.issuerOnBroker(bitfinex)
+        final Flux<Tick> arbiteeFlux = brokerIssuer.apply(bitfinex)
                 .issue(bitfinexTickerSub)
                 .mapNotNull(brokerSpecific(BitfinexTick.class))
                 .map(BitfinexTick::getData)
